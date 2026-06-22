@@ -29,14 +29,16 @@ CONFIG = {
     'lgbm_params': {
         'objective': 'regression',
         'metric': 'rmse',
-        'learning_rate': 0.05,
-        'num_leaves': 63,
-        'min_child_samples': 20,
-        'n_estimators': 500,
+        'learning_rate': 0.02,
+        'num_leaves': 127,
+        'min_child_samples': 30,
+        'n_estimators': 2000,
         'subsample': 0.8,
-        'colsample_bytree': 0.8,
-        'reg_alpha': 0.1,
+        'subsample_freq': 1,
+        'colsample_bytree': 0.7,
+        'reg_alpha': 0.05,
         'reg_lambda': 0.1,
+        'min_split_gain': 0.01,
         'random_state': 42,
         'n_jobs': 4,
         'verbose': -1,
@@ -52,6 +54,18 @@ FEATURE_BLACKLIST = {
 
 def get_feature_cols(df):
     return [c for c in df.columns if c not in FEATURE_BLACKLIST]
+
+
+def time_decay_weights(dates_series, half_life_days=500):
+    """
+    时间衰减样本权重：越近的数据权重越高。
+    half_life_days天前的样本权重减半。
+    """
+    dates = pd.to_datetime(dates_series)
+    max_date = dates.max()
+    age_days = (max_date - dates).dt.days.values
+    weights = 0.5 ** (age_days / half_life_days)
+    return weights
 
 
 def portfolio_return(pred_scores, true_labels, top_k=5):
@@ -107,7 +121,9 @@ def time_series_cv(df, feature_cols):
         X_val = val_df[feature_cols].values
         y_val = val_df['label'].values
 
-        dtrain = lgb.Dataset(X_train, label=y_train)
+        w_train = time_decay_weights(train_df['日期'])
+
+        dtrain = lgb.Dataset(X_train, label=y_train, weight=w_train)
         dval = lgb.Dataset(X_val, label=y_val, reference=dtrain)
 
         model = lgb.train(
@@ -155,20 +171,24 @@ def _to_rank_label(df, labels):
     return result
 
 
-def train_final_model(df, feature_cols):
+def train_final_model(df, feature_cols, num_rounds=None):
     """在全量数据上训练最终模型（用于提交）"""
     print("\n在全量数据上训练最终模型...")
     df = df.dropna(subset=feature_cols).copy()
 
     X = df[feature_cols].values
     y = df['label'].values
+    w = time_decay_weights(df['日期'])
 
-    dataset = lgb.Dataset(X, label=y)
+    n_rounds = num_rounds or CONFIG['lgbm_params']['n_estimators']
+    print(f"  使用 {n_rounds} 轮（来自CV最佳迭代）")
+
+    dataset = lgb.Dataset(X, label=y, weight=w)
     model = lgb.train(
         CONFIG['lgbm_params'],
         dataset,
-        num_boost_round=CONFIG['lgbm_params']['n_estimators'],
-        callbacks=[lgb.log_evaluation(100)],
+        num_boost_round=n_rounds,
+        callbacks=[lgb.log_evaluation(200)],
     )
     return model
 
@@ -203,7 +223,19 @@ def main():
     print(f"  平均: {np.mean(cv_returns)*100:.3f}%  |  标准差: {np.std(cv_returns)*100:.3f}%")
 
     # ── 3. 训练最终模型 ──
-    final_model = train_final_model(df, feature_cols)
+    # 用各折best_iter的"近期加权平均"决定轮数：
+    # 越近的折权重越高（fold_results[0]是最新折），因为预测期紧跟最新数据。
+    iters = [(r['fold'], r['best_iter']) for r in fold_results if r.get('best_iter')]
+    if iters:
+        n = len(iters)
+        # fold_results按fold升序，fold1是最新→给最大权重
+        weights = [n - i for i in range(n)]
+        num_rounds = int(round(
+            sum(w * it for w, (_, it) in zip(weights, iters)) / sum(weights)
+        ))
+    else:
+        num_rounds = None
+    final_model = train_final_model(df, feature_cols, num_rounds=num_rounds)
 
     # ── 4. 保存 ──
     joblib.dump(final_model, os.path.join(CONFIG['output_dir'], 'lgbm_model.pkl'))

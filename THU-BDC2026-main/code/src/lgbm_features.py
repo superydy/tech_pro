@@ -95,66 +95,73 @@ def per_stock_features(df: pd.DataFrame) -> pd.DataFrame:
     h = d['最高']
     l = d['最低']
     o = d['开盘']
+    ret1 = c.pct_change(1)
 
-    # 收益率
-    for w in [1, 3, 5, 10, 20, 40]:
+    # ── 收益率：短/中/长期动量 ──
+    for w in [1, 3, 5, 10, 20, 40, 60, 120]:
         d[f'ret_{w}'] = c.pct_change(w)
 
-    # 简单移动均线
-    for w in [5, 10, 20, 40, 60]:
-        d[f'sma_{w}'] = c.rolling(w).mean()
-        d[f'sma_ratio_{w}'] = c / d[f'sma_{w}'] - 1  # 价格偏离均线的幅度
+    # ── 动量加速度（短期动量 vs 中长期动量之差，捕捉动量转折）──
+    d['mom_accel_s'] = d['ret_5'] - d['ret_20']   # 短期加速
+    d['mom_accel_m'] = d['ret_20'] - d['ret_60']  # 中期加速
 
-    # 波动率
-    ret1 = c.pct_change(1)
+    # ── 均线比率（价格偏离均线幅度，去掉绝对均线值）──
+    for w in [5, 20, 40, 60, 120]:
+        sma = c.rolling(w).mean()
+        d[f'sma_ratio_{w}'] = c / (sma + 1e-9) - 1
+
+    # ── 波动率 ──
     for w in [5, 10, 20]:
         d[f'vol_{w}'] = ret1.rolling(w).std()
+    d['vol_ratio'] = d['vol_5'] / (d['vol_20'] + 1e-9)  # 波动率扩张/收缩
 
-    # 成交量特征
+    # ── 成交量 ──
     for w in [5, 10, 20]:
-        d[f'vmа_{w}'] = v.rolling(w).mean()
-        d[f'vratio_{w}'] = v / (d[f'vmа_{w}'] + 1e-9)  # 量比
+        d[f'vma_{w}'] = v.rolling(w).mean()
+    d['vratio_5'] = v / (d['vma_5'] + 1e-9)   # 短期量比
+    d['vol_trend'] = d['vma_5'] / (d['vma_20'] + 1e-9)  # 量能趋势
 
-    # MACD（快慢线之差，不用TA-Lib手动算）
+    # ── MACD ──
     ema12 = c.ewm(span=12).mean()
     ema26 = c.ewm(span=26).mean()
     d['macd'] = ema12 - ema26
     d['macd_signal'] = d['macd'].ewm(span=9).mean()
     d['macd_hist'] = d['macd'] - d['macd_signal']
 
-    # RSI（14日）
+    # ── RSI ──
     delta = c.diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
     d['rsi_14'] = 100 - 100 / (1 + gain / (loss + 1e-9))
 
-    # 布林带
+    # ── 布林带 ──
     mid = c.rolling(20).mean()
     std = c.rolling(20).std()
     d['boll_upper_dist'] = (c - (mid + 2 * std)) / (std + 1e-9)
     d['boll_lower_dist'] = (c - (mid - 2 * std)) / (std + 1e-9)
     d['boll_width'] = 4 * std / (mid + 1e-9)
 
-    # 价格形态
+    # ── 价格形态 ──
     d['high_low_ratio'] = (h - l) / (l + 1e-9)
     d['open_close_ratio'] = (c - o) / (o + 1e-9)
     d['upper_shadow'] = (h - c.clip(lower=o)) / (h - l + 1e-9)
     d['lower_shadow'] = (c.clip(upper=o) - l) / (h - l + 1e-9)
 
-    # 换手率滚动
+    # ── 换手率 ──
     t = d['换手率']
     for w in [5, 10, 20]:
         d[f'turn_ma_{w}'] = t.rolling(w).mean()
-        d[f'turn_ratio_{w}'] = t / (d[f'turn_ma_{w}'] + 1e-9)
+    d['turn_trend'] = d['turn_ma_5'] / (d['turn_ma_20'] + 1e-9)  # 换手率趋势
 
-    # 涨跌幅原始值保留
-    d['pct_chg'] = d['涨跌幅']
+    # ── N日价格区间位置（52周位置是经典因子）──
+    for w in [20, 60, 252]:
+        hi = h.rolling(w).max()
+        lo = l.rolling(w).min()
+        d[f'close_pos_{w}'] = (c - lo) / (hi - lo + 1e-9)
 
-    # 最高最低价位置
-    for w in [5, 10, 20]:
-        d[f'highest_{w}'] = h.rolling(w).max()
-        d[f'lowest_{w}'] = l.rolling(w).min()
-        d[f'close_pos_{w}'] = (c - d[f'lowest_{w}']) / (d[f'highest_{w}'] - d[f'lowest_{w}'] + 1e-9)
+    # ── 收益率连续性：近N日上涨天数占比 ──
+    d['ret_pos_5'] = (ret1 > 0).rolling(5).mean()
+    d['ret_pos_20'] = (ret1 > 0).rolling(20).mean()
 
     return d
 
@@ -171,16 +178,17 @@ def cross_section_features(df: pd.DataFrame) -> pd.DataFrame:
     这样模型能感知"今天谁比其他股票强"，而不只是看自身绝对值。
     """
     df = df.copy()
-    ret_cols = [f'ret_{w}' for w in [1, 3, 5, 10, 20]]
-    vol_cols = [f'vol_{w}' for w in [5, 10, 20]]
-    extra_cols = ['换手率', 'vratio_5', 'rsi_14']
+    # 横截面排名：短/中/长期动量 + 波动率 + 换手率 + 动量加速度
+    rank_cols = (
+        [f'ret_{w}' for w in [1, 3, 5, 10, 20, 40, 60, 120]]
+        + [f'vol_{w}' for w in [5, 10, 20]]
+        + ['换手率', 'vratio_5', 'rsi_14', 'mom_accel_s', 'mom_accel_m', 'vol_ratio']
+    )
 
-    for col in ret_cols + vol_cols + extra_cols:
+    for col in rank_cols:
         if col not in df.columns:
             continue
-        # 当天排名百分位（0=最低，1=最高）
         df[f'cs_rank_{col}'] = df.groupby('日期')[col].rank(pct=True)
-        # 超额值（减去当天市场均值）
         df[f'cs_excess_{col}'] = df[col] - df.groupby('日期')[col].transform('mean')
 
     return df

@@ -1,6 +1,6 @@
-CV avg weekly return: 0.9262%
-CV std: 2.2131%
-Fold 1: 2.9144%
-Fold 2: -1.7906%
-Fold 3: -0.7084%
-Fold 4: 3.2895%
+CV avg weekly return: 1.7214%
+CV std: 2.1684%
+Fold 1: 4.6922%
+Fold 2: -0.3751%
+Fold 3: -0.3290%
+Fold 4: 2.8975%

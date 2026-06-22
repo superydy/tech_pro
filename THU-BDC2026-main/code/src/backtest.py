@@ -60,7 +60,22 @@ def _prepare_data():
     return df, fc, fwd_map
 
 
-def run_backtest(seeds=(42,), n_rounds=67):
+def timing_filter(mkt_ret5, mkt_std5, top_k=5):
+    """
+    数据驱动的择时规则（从72周回测分析得出）：
+    - 高波动(>1.0%)：模型最强，满仓top_k
+    - 低波动微涨(ret>0.5% AND std<0.7%)：alpha最弱，缩到3只
+    - 其他：正常top_k
+    不再惩罚微跌市场（数据显示微跌时胜率75%，不该减仓）
+    """
+    if mkt_std5 > 1.0:
+        return top_k          # 高波动：满仓
+    if mkt_ret5 > 0.5 and mkt_std5 < 0.7:
+        return max(3, top_k - 2)  # 舒适牛市低波动：缩仓
+    return top_k
+
+
+def run_backtest(seeds=(42,), n_rounds=67, use_timing=False):
     df, fc, fwd_map = _prepare_data()
 
     dates = sorted(df['日期'].unique())
@@ -105,7 +120,20 @@ def run_backtest(seeds=(42,), n_rounds=67):
         day = day.copy()
         day['score'] = rank_sum
 
-        top = day.nlargest(BACKTEST['top_k'], 'score')
+        # 市场状态（用于择时 + 分析记录）
+        recent_idx = dates.index(ep)
+        recent_dates_10 = set(dates[max(0, recent_idx-10):recent_idx])
+        mkt = df[df['日期'].isin(recent_dates_10)]
+        daily_mkt = mkt.groupby('日期')['涨跌幅'].mean()
+        mkt_ret5  = daily_mkt.tail(5).mean()
+        mkt_ret10 = daily_mkt.mean()
+        mkt_std5  = daily_mkt.tail(5).std()
+        mkt_breadth = (mkt[mkt['日期'].isin(set(dates[max(0,recent_idx-5):recent_idx]))]['涨跌幅'] > 0).mean()
+
+        # 择时：动态调整持仓数量
+        n_hold = timing_filter(mkt_ret5, mkt_std5, BACKTEST['top_k']) if use_timing else BACKTEST['top_k']
+
+        top = day.nlargest(n_hold, 'score')
         # 用"真实前瞻收益"算组合收益
         rets = []
         for _, r in top.iterrows():
@@ -113,18 +141,10 @@ def run_backtest(seeds=(42,), n_rounds=67):
             if key in fwd_map.index:
                 rets.append(fwd_map.loc[key])
         if rets:
-            # 同时记录当周的市场状态（用于择时分析）
-            # 取 ep 之前 10 个交易日的市场数据
-            recent_idx = dates.index(ep)
-            recent_dates = set(dates[max(0, recent_idx-10):recent_idx])
-            mkt = df[df['日期'].isin(recent_dates)]
-            mkt_ret5  = mkt.groupby('日期')['涨跌幅'].mean().tail(5).mean()
-            mkt_ret10 = mkt.groupby('日期')['涨跌幅'].mean().mean()
-            mkt_std5  = mkt.groupby('日期')['涨跌幅'].mean().tail(5).std()
-            mkt_breadth = (mkt[mkt['日期'].isin(set(dates[max(0,recent_idx-5):recent_idx]))]['涨跌幅'] > 0).mean()
             results.append({
                 'date': ep,
                 'ret': np.mean(rets),
+                'n_hold': n_hold,
                 'mkt_ret5': mkt_ret5,
                 'mkt_ret10': mkt_ret10,
                 'mkt_std5': mkt_std5,
@@ -201,12 +221,19 @@ if __name__ == '__main__':
     ap.add_argument('--seeds', type=int, default=1)
     ap.add_argument('--rounds', type=int, default=67)
     ap.add_argument('--analyze', action='store_true', help='输出择时分析')
+    ap.add_argument('--timing', action='store_true', help='启用数据驱动择时规则')
     args = ap.parse_args()
 
     seed_pool = [42, 7, 123, 2024, 99]
     seeds = tuple(seed_pool[:args.seeds])
-    print(f"【{len(seeds)} 种子】seeds={seeds}")
-    res = run_backtest(seeds=seeds, n_rounds=args.rounds)
-    report(f"{len(seeds)}种子 LightGBM", res)
+
+    print(f"【无择时】seeds={seeds}")
+    res_base = run_backtest(seeds=seeds, n_rounds=args.rounds, use_timing=False)
+    report("基准（无择时）", res_base)
+
+    print(f"\n【数据驱动择时】seeds={seeds}")
+    res_timed = run_backtest(seeds=seeds, n_rounds=args.rounds, use_timing=True)
+    report("数据驱动择时", res_timed)
+
     if args.analyze:
-        analyze_timing(res)
+        analyze_timing(res_base)

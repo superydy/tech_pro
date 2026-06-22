@@ -19,3 +19,6 @@ wheels/
 
 *.tar
 
+data/stock_data.csv
+data/train.csv
+data/test.csv

@@ -35,7 +35,8 @@ def dynamic_weights(scores, top_k):
     exp_s = np.exp((top_scores - top_scores.max()) * 2)
     weights = exp_s / exp_s.sum()
     weights = np.clip(weights, 0.05, 0.40)
-    weights = weights / weights.sum()  # 归一化确保加起来=1
+    weights = weights / weights.sum()
+    weights = np.floor(weights * 10000) / 10000  # 截断到4位小数，确保总和<=1
     return weights
 
 

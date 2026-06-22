@@ -39,15 +39,29 @@ def build_label_horizon(df):
     return df
 
 
-def run_backtest(seeds=(42,), n_rounds=67):
+_FEATURE_CACHE = {}
+
+
+def _prepare_data():
+    """构建特征 + 前瞻收益，只算一次并缓存（多配置对比时大幅省时）。"""
+    if 'df' in _FEATURE_CACHE:
+        return _FEATURE_CACHE['df'], _FEATURE_CACHE['fc'], _FEATURE_CACHE['fwd_map']
+
     raw = pd.read_csv(CONFIG['data_path'])
     df = build_features(raw, n_jobs=4)          # 含 label
     fc = get_feature_cols(df)
 
-    # 为回测单独算"真实前瞻收益"（含最新无标签行也算，方便对齐）
+    # 真实前瞻收益（T+1开盘→T+5开盘），用未删尾的版本对齐
     full = build_features(raw, n_jobs=4, with_label=False)
     full = build_label_horizon(full)
     fwd_map = full.set_index(['日期', '股票代码'])['fwd_ret']
+
+    _FEATURE_CACHE.update(df=df, fc=fc, fwd_map=fwd_map)
+    return df, fc, fwd_map
+
+
+def run_backtest(seeds=(42,), n_rounds=67):
+    df, fc, fwd_map = _prepare_data()
 
     dates = sorted(df['日期'].unique())
     last_date = dates[-1]
@@ -123,13 +137,16 @@ def report(name, results):
 
 
 if __name__ == '__main__':
-    import multiprocessing
+    import multiprocessing, argparse
     multiprocessing.set_start_method('spawn', force=True)
 
-    print("【单种子】")
-    r1 = run_backtest(seeds=(42,), n_rounds=67)
-    report("单种子 LightGBM", r1)
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--seeds', type=int, default=1, help='种子数量（1=单种子，>1=多种子排名平均）')
+    ap.add_argument('--rounds', type=int, default=67)
+    args = ap.parse_args()
 
-    print("\n【5种子平均】")
-    r5 = run_backtest(seeds=(42, 7, 123, 2024, 99), n_rounds=67)
-    report("5种子平均 LightGBM", r5)
+    seed_pool = [42, 7, 123, 2024, 99]
+    seeds = tuple(seed_pool[:args.seeds])
+    print(f"【{len(seeds)} 种子】seeds={seeds}")
+    r = run_backtest(seeds=seeds, n_rounds=args.rounds)
+    report(f"{len(seeds)}种子 LightGBM", r)

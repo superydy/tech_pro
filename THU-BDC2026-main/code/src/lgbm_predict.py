@@ -46,7 +46,7 @@ def market_ok(df, latest_date):
     - 否则正常
     返回建议持仓数量
     """
-    recent = df[df['日期'] < latest_date].copy()
+    recent = df[df['日期'] < str(latest_date)[:10]].copy()
     recent_dates = sorted(recent['日期'].unique())[-5:]
     recent = recent[recent['日期'].isin(recent_dates)]
     avg_ret = recent.groupby('日期')['涨跌幅'].mean().mean()

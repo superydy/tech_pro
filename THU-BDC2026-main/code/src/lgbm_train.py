@@ -27,9 +27,8 @@ CONFIG = {
     'gap_days': 5,       # 训练集和验证集之间的间隔天数（防止数据泄露）
     'val_days': 20,      # 每折验证集天数
     'lgbm_params': {
-        'objective': 'lambdarank',
-        'metric': 'ndcg',
-        'ndcg_eval_at': [5],
+        'objective': 'regression',
+        'metric': 'rmse',
         'learning_rate': 0.05,
         'num_leaves': 63,
         'min_child_samples': 20,
@@ -108,17 +107,8 @@ def time_series_cv(df, feature_cols):
         X_val = val_df[feature_cols].values
         y_val = val_df['label'].values
 
-        # LightGBM Ranker 需要 group（每个query有多少个样本）
-        train_groups = train_df.groupby('日期').size().values
-        val_groups = val_df.groupby('日期').size().values
-
-        # 把连续收益率转成排序标签（0~num_stocks-1的整数）
-        # LambdaRank需要整数相关性标签
-        y_train_rank = _to_rank_label(train_df, y_train)
-        y_val_rank = _to_rank_label(val_df, y_val)
-
-        dtrain = lgb.Dataset(X_train, label=y_train_rank, group=train_groups)
-        dval = lgb.Dataset(X_val, label=y_val_rank, group=val_groups, reference=dtrain)
+        dtrain = lgb.Dataset(X_train, label=y_train)
+        dval = lgb.Dataset(X_val, label=y_val, reference=dtrain)
 
         model = lgb.train(
             CONFIG['lgbm_params'],
@@ -171,10 +161,9 @@ def train_final_model(df, feature_cols):
     df = df.dropna(subset=feature_cols).copy()
 
     X = df[feature_cols].values
-    y = _to_rank_label(df, df['label'].values)
-    groups = df.groupby('日期').size().values
+    y = df['label'].values
 
-    dataset = lgb.Dataset(X, label=y, group=groups)
+    dataset = lgb.Dataset(X, label=y)
     model = lgb.train(
         CONFIG['lgbm_params'],
         dataset,

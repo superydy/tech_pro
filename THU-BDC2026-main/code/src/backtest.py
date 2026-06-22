@@ -113,13 +113,32 @@ def run_backtest(seeds=(42,), n_rounds=67):
             if key in fwd_map.index:
                 rets.append(fwd_map.loc[key])
         if rets:
-            results.append(np.mean(rets))
+            # 同时记录当周的市场状态（用于择时分析）
+            # 取 ep 之前 10 个交易日的市场数据
+            recent_idx = dates.index(ep)
+            recent_dates = set(dates[max(0, recent_idx-10):recent_idx])
+            mkt = df[df['日期'].isin(recent_dates)]
+            mkt_ret5  = mkt.groupby('日期')['涨跌幅'].mean().tail(5).mean()
+            mkt_ret10 = mkt.groupby('日期')['涨跌幅'].mean().mean()
+            mkt_std5  = mkt.groupby('日期')['涨跌幅'].mean().tail(5).std()
+            mkt_breadth = (mkt[mkt['日期'].isin(set(dates[max(0,recent_idx-5):recent_idx]))]['涨跌幅'] > 0).mean()
+            results.append({
+                'date': ep,
+                'ret': np.mean(rets),
+                'mkt_ret5': mkt_ret5,
+                'mkt_ret10': mkt_ret10,
+                'mkt_std5': mkt_std5,
+                'mkt_breadth': mkt_breadth,
+            })
 
-    results = np.array(results)
-    return results
+    return pd.DataFrame(results)
 
 
-def report(name, results):
+def report(name, df_or_arr):
+    if isinstance(df_or_arr, pd.DataFrame):
+        results = df_or_arr['ret'].values
+    else:
+        results = np.asarray(df_or_arr)
     if len(results) == 0:
         print(f"{name}: 无有效样本")
         return
@@ -136,17 +155,58 @@ def report(name, results):
     print(f"  累计收益(简单相加): {results.sum()*100:.1f}%")
 
 
+def analyze_timing(res_df):
+    """分析哪些市场状态下模型表现差，找择时规则。"""
+    import numpy as np
+    print("\n=== 择时分析：各市场状态下的周收益 ===")
+
+    # 1. 按近5日市场均涨跌幅分组
+    bins_ret = [-999, -1.5, -0.5, 0.5, 1.5, 999]
+    labels_ret = ['<-1.5%', '-1.5~-0.5%', '-0.5~0.5%', '0.5~1.5%', '>1.5%']
+    res_df['mkt_ret5_bin'] = pd.cut(res_df['mkt_ret5'], bins=bins_ret, labels=labels_ret)
+    g = res_df.groupby('mkt_ret5_bin', observed=True)['ret'].agg(['mean','count','std'])
+    g['win_rate'] = res_df.groupby('mkt_ret5_bin', observed=True)['ret'].apply(lambda x: (x>0).mean())
+    print("\n近5日市场均涨跌幅 → 组合周收益：")
+    print(f"  {'区间':<14} {'均值%':>7} {'胜率%':>7} {'标准差%':>8} {'样本':>5}")
+    for label, row in g.iterrows():
+        wr = res_df[res_df['mkt_ret5_bin']==label]['ret']
+        print(f"  {str(label):<14} {row['mean']*100:>6.2f} {(wr>0).mean()*100:>7.1f} {row['std']*100:>8.2f} {int(row['count']):>5}")
+
+    # 2. 按市场波动率分组
+    bins_vol = [0, 0.5, 1.0, 1.5, 999]
+    labels_vol = ['<0.5%', '0.5~1.0%', '1.0~1.5%', '>1.5%']
+    res_df['mkt_std5_bin'] = pd.cut(res_df['mkt_std5'], bins=bins_vol, labels=labels_vol)
+    g2 = res_df.groupby('mkt_std5_bin', observed=True)['ret']
+    print("\n近5日市场波动率（日涨跌幅标准差）→ 组合周收益：")
+    print(f"  {'区间':<12} {'均值%':>7} {'胜率%':>7} {'样本':>5}")
+    for label, grp in g2:
+        print(f"  {str(label):<12} {grp.mean()*100:>6.2f} {(grp>0).mean()*100:>7.1f} {len(grp):>5}")
+
+    # 3. 按市场涨跌比例分组
+    bins_br = [0, 0.35, 0.45, 0.55, 0.65, 1.0]
+    labels_br = ['<35%', '35~45%', '45~55%', '55~65%', '>65%']
+    res_df['breadth_bin'] = pd.cut(res_df['mkt_breadth'], bins=bins_br, labels=labels_br)
+    g3 = res_df.groupby('breadth_bin', observed=True)['ret']
+    print("\n近5日市场上涨家数占比 → 组合周收益：")
+    print(f"  {'区间':<12} {'均值%':>7} {'胜率%':>7} {'样本':>5}")
+    for label, grp in g3:
+        print(f"  {str(label):<12} {grp.mean()*100:>6.2f} {(grp>0).mean()*100:>7.1f} {len(grp):>5}")
+
+
 if __name__ == '__main__':
     import multiprocessing, argparse
     multiprocessing.set_start_method('spawn', force=True)
 
     ap = argparse.ArgumentParser()
-    ap.add_argument('--seeds', type=int, default=1, help='种子数量（1=单种子，>1=多种子排名平均）')
+    ap.add_argument('--seeds', type=int, default=1)
     ap.add_argument('--rounds', type=int, default=67)
+    ap.add_argument('--analyze', action='store_true', help='输出择时分析')
     args = ap.parse_args()
 
     seed_pool = [42, 7, 123, 2024, 99]
     seeds = tuple(seed_pool[:args.seeds])
     print(f"【{len(seeds)} 种子】seeds={seeds}")
-    r = run_backtest(seeds=seeds, n_rounds=args.rounds)
-    report(f"{len(seeds)}种子 LightGBM", r)
+    res = run_backtest(seeds=seeds, n_rounds=args.rounds)
+    report(f"{len(seeds)}种子 LightGBM", res)
+    if args.analyze:
+        analyze_timing(res)

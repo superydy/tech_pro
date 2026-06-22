@@ -102,29 +102,10 @@ def main():
     weights = dynamic_weights(top_df['pred_score'].values, n_hold)
 
     # ── 7. 生成 result.csv ──
-    # 股票代码还原为6位字符串
-    # train.csv里股票代码是数字索引，需要对应回原始代码
-    # 读stock_list拿真实代码
-    stock_list = pd.read_csv('./data/hs300_stock_list.csv')
-    stock_list['pure_code'] = stock_list['code'].str.replace(r'^[a-z]+\.', '', regex=True).str.zfill(6)
-
-    # train.csv里的股票代码是排序后的索引（1,2,63...）
-    # 先建立索引→真实代码的映射
-    raw2 = pd.read_csv(DATA_PATH)
-    raw2['股票代码'] = raw2['股票代码'].astype(str)
-    all_codes = sorted(raw2['股票代码'].unique(), key=lambda x: int(x))
-    # stock_list按代码排序
-    sl_sorted = sorted(stock_list['pure_code'].tolist())
-
-    # 映射：train里的索引 → 真实6位代码
-    idx2code = {str(i + 1): code for i, code in enumerate(sl_sorted)}
-
     result_rows = []
     for i, row in top_df.iterrows():
-        raw_code = str(int(row['股票代码']))
-        real_code = idx2code.get(raw_code, raw_code.zfill(6))
         result_rows.append({
-            'stock_id': real_code,
+            'stock_id': str(row['股票代码']).zfill(6),
             'weight': round(weights[len(result_rows)], 4)
         })
 

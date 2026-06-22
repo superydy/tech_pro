@@ -31,21 +31,30 @@ def dynamic_weights(scores, top_k):
     return weights
 
 
-def market_ok(df, latest_date):
+def market_regime(df, latest_date, top_k=TOP_K):
+    """
+    数据驱动择时（72周回测分析得出）：
+    - 舒适低波动牛市(ret5>0.5% AND std5<0.7%)：alpha最低，缩至3只
+    - 高波动(std5>1.0%)：模型最强，满仓
+    - 其他：正常持仓
+    注：微跌市场胜率75%，不再减仓
+    """
     recent = df[df['日期'] < str(latest_date)[:10]].copy()
-    recent_dates = sorted(recent['日期'].unique())[-5:]
+    recent_dates = sorted(recent['日期'].unique())[-10:]
     recent = recent[recent['日期'].isin(recent_dates)]
-    avg_ret = recent.groupby('日期')['涨跌幅'].mean().mean()
-    mkt_vol = recent.groupby('日期')['涨跌幅'].std().mean()
+    daily_ret = recent.groupby('日期')['涨跌幅'].mean()
+    mkt_ret5 = daily_ret.tail(5).mean()
+    mkt_std5 = daily_ret.tail(5).std()
 
-    if avg_ret < -2.0:
-        print(f"市场偏弱（近5日均涨跌幅{avg_ret:.2f}%），减少持仓到3只")
-        return 3
-    if avg_ret < -1.0 and mkt_vol > 3.0:
-        print(f"市场震荡（近5日均涨跌幅{avg_ret:.2f}%，波动{mkt_vol:.2f}%），持仓4只")
-        return 4
-    print(f"市场状态正常（近5日均涨跌幅{avg_ret:.2f}%），持仓{TOP_K}只")
-    return TOP_K
+    if mkt_std5 > 1.0:
+        print(f"高波动市场(近5日std={mkt_std5:.2f}%)，模型最强，持仓{top_k}只")
+        return top_k
+    if mkt_ret5 > 0.5 and mkt_std5 < 0.7:
+        n = max(3, top_k - 2)
+        print(f"低波动微涨(ret5={mkt_ret5:.2f}%, std5={mkt_std5:.2f}%)，alpha偏低，缩仓至{n}只")
+        return n
+    print(f"市场正常(ret5={mkt_ret5:.2f}%, std5={mkt_std5:.2f}%)，持仓{top_k}只")
+    return top_k
 
 
 def main():
@@ -111,7 +120,7 @@ def main():
     merged['avg_rank'] = merged[rank_cols].mean(axis=1)
 
     # ── 5. 市场状态 → 持仓数量 ──
-    n_hold = market_ok(raw, latest_date)
+    n_hold = market_regime(raw, latest_date)
 
     # ── 6. 选 Top-N，动态权重 ──
     top_df = merged.nsmallest(n_hold, 'avg_rank').reset_index(drop=True)

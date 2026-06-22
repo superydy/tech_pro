@@ -74,7 +74,8 @@ def main():
     # ── 2. 加载数据，计算特征 ──
     print("加载数据并计算特征...")
     raw = pd.read_csv(DATA_PATH)
-    df = build_features(raw, n_jobs=4)
+    # with_label=False：保留最新行，不丢弃没有T+5数据的行
+    df = build_features(raw, n_jobs=4, with_label=False)
     df = df.replace([float('inf'), float('-inf')], float('nan'))
 
     # ── 3. 取最新交易日 ──

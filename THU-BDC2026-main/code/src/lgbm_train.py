@@ -26,13 +26,14 @@ CONFIG = {
     'n_splits': 4,
     'gap_days': 5,       # 训练集和验证集之间的间隔天数（防止数据泄露）
     'val_days': 20,      # 每折验证集天数
+    # 最终模型固定轮数（由72周稳健回测扫描选出，见 hpsweep）
+    'final_rounds': 500,
     'lgbm_params': {
         'objective': 'regression',
         'metric': 'rmse',
-        'learning_rate': 0.02,
-        'num_leaves': 127,
+        'learning_rate': 0.03,
+        'num_leaves': 63,
         'min_child_samples': 30,
-        'n_estimators': 2000,
         'subsample': 0.8,
         'subsample_freq': 1,
         'colsample_bytree': 0.7,
@@ -126,10 +127,11 @@ def time_series_cv(df, feature_cols):
         dtrain = lgb.Dataset(X_train, label=y_train, weight=w_train)
         dval = lgb.Dataset(X_val, label=y_val, reference=dtrain)
 
+        # 上限给足，让早停决定实际轮数（CV仅用于观察，不决定最终轮数）
         model = lgb.train(
             CONFIG['lgbm_params'],
             dtrain,
-            num_boost_round=CONFIG['lgbm_params']['n_estimators'],
+            num_boost_round=2000,
             valid_sets=[dval],
             callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(100)],
         )
@@ -180,8 +182,8 @@ def train_final_model(df, feature_cols, num_rounds=None):
     y = df['label'].values
     w = time_decay_weights(df['日期'])
 
-    n_rounds = num_rounds or CONFIG['lgbm_params']['n_estimators']
-    print(f"  使用 {n_rounds} 轮（来自CV最佳迭代）")
+    n_rounds = num_rounds or CONFIG['final_rounds']
+    print(f"  使用 {n_rounds} 轮（由72周稳健回测扫描选定）")
 
     dataset = lgb.Dataset(X, label=y, weight=w)
     model = lgb.train(
@@ -223,19 +225,9 @@ def main():
     print(f"  平均: {np.mean(cv_returns)*100:.3f}%  |  标准差: {np.std(cv_returns)*100:.3f}%")
 
     # ── 3. 训练最终模型 ──
-    # 用各折best_iter的"近期加权平均"决定轮数：
-    # 越近的折权重越高（fold_results[0]是最新折），因为预测期紧跟最新数据。
-    iters = [(r['fold'], r['best_iter']) for r in fold_results if r.get('best_iter')]
-    if iters:
-        n = len(iters)
-        # fold_results按fold升序，fold1是最新→给最大权重
-        weights = [n - i for i in range(n)]
-        num_rounds = int(round(
-            sum(w * it for w, (_, it) in zip(weights, iters)) / sum(weights)
-        ))
-    else:
-        num_rounds = None
-    final_model = train_final_model(df, feature_cols, num_rounds=num_rounds)
+    # 轮数固定为 CONFIG['final_rounds']（由72周稳健回测扫描选出，
+    # 比CV早停的轮数更可靠——CV的组合收益指标方差太大）。
+    final_model = train_final_model(df, feature_cols, num_rounds=CONFIG['final_rounds'])
 
     # ── 4. 保存 ──
     joblib.dump(final_model, os.path.join(CONFIG['output_dir'], 'lgbm_model.pkl'))

@@ -307,10 +307,12 @@ def build_label(df: pd.DataFrame, excess: bool = False) -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # 5. 完整特征流水线
 # ─────────────────────────────────────────────
-def build_features(df: pd.DataFrame, n_jobs: int = 4, with_label: bool = True) -> pd.DataFrame:
+def build_features(df: pd.DataFrame, n_jobs: int = 4, with_label: bool = True,
+                   excess_label: bool = False) -> pd.DataFrame:
     """
     完整流水线：原始数据 → 所有特征（+ 标签）
     with_label=False 用于预测模式，保留最新行不丢弃
+    excess_label=True 用超额收益作标签（学习相对alpha）
     """
     from multiprocessing import Pool
     from tqdm import tqdm
@@ -341,7 +343,7 @@ def build_features(df: pd.DataFrame, n_jobs: int = 4, with_label: bool = True) -
     if with_label:
         # Step 5: 标签
         print("Step5: 构建标签...")
-        df = build_label(df)
+        df = build_label(df, excess=excess_label)
 
     # 清理
     df = df.replace([np.inf, -np.inf], np.nan)

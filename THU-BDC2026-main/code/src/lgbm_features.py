@@ -163,6 +163,49 @@ def per_stock_features(df: pd.DataFrame) -> pd.DataFrame:
     d['ret_pos_5'] = (ret1 > 0).rolling(5).mean()
     d['ret_pos_20'] = (ret1 > 0).rolling(20).mean()
 
+    # ── 成交额（金额比成交量更能反映资金）──
+    amt = d['成交额']
+    for w in [5, 10, 20]:
+        d[f'amt_ma_{w}'] = amt.rolling(w).mean()
+    d['amt_ratio_5'] = amt / (d['amt_ma_5'] + 1e-9)   # 短期额比（量能爆发）
+    d['amt_trend'] = d['amt_ma_5'] / (d['amt_ma_20'] + 1e-9)  # 量能趋势
+
+    # ── 跳空缺口（隔夜情绪信号）──
+    prev_close = c.shift(1)
+    d['gap'] = (o - prev_close) / (prev_close + 1e-9)
+    d['gap_ma_5'] = d['gap'].rolling(5).mean()         # 近5日缺口方向
+    d['gap_cum_5'] = d['gap'].rolling(5).sum()          # 近5日累积跳空幅度
+
+    # ── ATR（平均真实波幅，归一化为收益率单位）──
+    true_range = pd.concat([
+        h - l,
+        (h - c.shift(1)).abs(),
+        (l - c.shift(1)).abs(),
+    ], axis=1).max(axis=1)
+    d['atr_14'] = true_range.rolling(14).mean() / (c + 1e-9)
+
+    # ── KDJ随机指标（国内最常用技术指标，含零售行为信号）──
+    h9 = h.rolling(9).max()
+    l9 = l.rolling(9).min()
+    rsv = (c - l9) / (h9 - l9 + 1e-9) * 100
+    kdj_k = rsv.ewm(com=2, adjust=False).mean()   # K线（alpha=1/3）
+    kdj_d = kdj_k.ewm(com=2, adjust=False).mean() # D线
+    d['kdj_k'] = kdj_k
+    d['kdj_d'] = kdj_d
+    d['kdj_j'] = 3 * kdj_k - 2 * kdj_d           # J线（超买超卖放大）
+
+    # ── Amihud非流动性比率（|收益率|/成交额，流动性溢价因子）──
+    d['amihud_20'] = (ret1.abs() / (amt + 1e-9)).rolling(20).mean() * 1e8
+
+    # ── 收益率分布：偏度 + MAX效应（A股特有：高偏度股未来收益低）──
+    d['ret_skew_20'] = ret1.rolling(20).skew()
+    d['ret_max_20'] = ret1.rolling(20).max()       # MAX效应：月内最大单日涨幅
+
+    # ── 价量背离（价涨量缩 vs 价涨量升，识别反转）──
+    vol_chg = v.pct_change()
+    d['pv_corr_10'] = ret1.rolling(10).corr(vol_chg)
+    d['pv_corr_20'] = ret1.rolling(20).corr(vol_chg)
+
     return d
 
 
@@ -183,6 +226,8 @@ def cross_section_features(df: pd.DataFrame) -> pd.DataFrame:
         [f'ret_{w}' for w in [1, 3, 5, 10, 20, 40, 60, 120]]
         + [f'vol_{w}' for w in [5, 10, 20]]
         + ['换手率', 'vratio_5', 'rsi_14', 'mom_accel_s', 'mom_accel_m', 'vol_ratio']
+        + ['amt_ratio_5', 'amt_trend', 'gap', 'atr_14',
+           'kdj_k', 'kdj_j', 'amihud_20', 'ret_skew_20', 'ret_max_20', 'pv_corr_20']
     )
 
     for col in rank_cols:

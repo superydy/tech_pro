@@ -281,10 +281,11 @@ def sector_features(df: pd.DataFrame, stock_list_path: str = './data/hs300_stock
 # ─────────────────────────────────────────────
 # 5. 构建标签
 # ─────────────────────────────────────────────
-def build_label(df: pd.DataFrame) -> pd.DataFrame:
+def build_label(df: pd.DataFrame, excess: bool = False) -> pd.DataFrame:
     """
-    标签：T+1开盘到T+5开盘的收益率
-    （与比赛评分完全一致）
+    标签：T+1开盘到T+5开盘的收益率。
+    excess=True：减去当日市场均值，变成超额收益（让模型学"谁比大盘强"）。
+    excess=False（默认）：绝对收益（与比赛评分一致）。
     """
     df = df.copy()
     df = df.sort_values(['股票代码', '日期'])
@@ -294,6 +295,12 @@ def build_label(df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna(subset=['label', 'open_t1'])
     df = df[df['open_t1'] > 1e-4]
     df = df.drop(columns=['open_t1', 'open_t5'])
+
+    if excess:
+        # 减去当天所有股票的平均绝对收益 → 超额收益
+        mkt_avg = df.groupby('日期')['label'].transform('mean')
+        df['label'] = df['label'] - mkt_avg
+
     return df
 
 

@@ -163,13 +163,6 @@ def per_stock_features(df: pd.DataFrame) -> pd.DataFrame:
     d['ret_pos_5'] = (ret1 > 0).rolling(5).mean()
     d['ret_pos_20'] = (ret1 > 0).rolling(20).mean()
 
-    # ── Amihud非流动性比率（|收益率|/成交额，流动性溢价因子；Top20重要性）──
-    amt = d['成交额']
-    d['amihud_20'] = (ret1.abs() / (amt + 1e-9)).rolling(20).mean() * 1e8
-
-    # ── MAX效应：月内最大单日涨幅（A股特有高偏度股信号；重要性确认）──
-    d['ret_max_20'] = ret1.rolling(20).max()
-
     return d
 
 
@@ -190,7 +183,6 @@ def cross_section_features(df: pd.DataFrame) -> pd.DataFrame:
         [f'ret_{w}' for w in [1, 3, 5, 10, 20, 40, 60, 120]]
         + [f'vol_{w}' for w in [5, 10, 20]]
         + ['换手率', 'vratio_5', 'rsi_14', 'mom_accel_s', 'mom_accel_m', 'vol_ratio']
-        + ['amihud_20', 'ret_max_20']
     )
 
     for col in rank_cols:
